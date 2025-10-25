@@ -1,0 +1,72 @@
+name: Deploy to Azure Container Apps
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+env:
+  AZURE_CONTAINER_REGISTRY: neighborhoodintelacr.azurecr.io
+  CONTAINER_NAME: neighborhood-intel
+  RESOURCE_GROUP: rg-neighborhood-intel-prod
+  CONTAINER_APP_NAME: neighborhood-intel-app
+  CONTAINER_APP_ENVIRONMENT: neighborhood-intel-env
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        cache: 'npm'
+    
+    - name: Install dependencies
+      run: npm ci
+    
+    - name: Generate Prisma client
+      run: npm run db:generate
+      env:
+        DATABASE_URL: ${{ secrets.DATABASE_URL }}
+    
+    - name: Build application
+      run: npm run build
+      env:
+        DATABASE_URL: ${{ secrets.DATABASE_URL }}
+    
+    - name: Azure Login
+      uses: azure/login@v1
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+    
+    - name: Build and push image to ACR
+      run: |
+        az acr build --registry $AZURE_CONTAINER_REGISTRY --image $CONTAINER_NAME:${{ github.sha }} .
+    
+    - name: Deploy to Container Apps
+      run: |
+        az containerapp update \
+          --name $CONTAINER_APP_NAME \
+          --resource-group $RESOURCE_GROUP \
+          --image $AZURE_CONTAINER_REGISTRY/$CONTAINER_NAME:${{ github.sha }}
+    
+    - name: Run database migrations
+      run: |
+        az containerapp exec \
+          --name $CONTAINER_APP_NAME \
+          --resource-group $RESOURCE_GROUP \
+          --command "npm run db:push"
+    
+    - name: Seed initial data
+      run: |
+        az containerapp exec \
+          --name $CONTAINER_APP_NAME \
+          --resource-group $RESOURCE_GROUP \
+          --command "npm run db:seed"
+      continue-on-error: true
