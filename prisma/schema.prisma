@@ -1,0 +1,77 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model GeoArea {
+  geoId       String  @id @map("geo_id")
+  geoType     String  @map("geo_type")
+  name        String
+  stateFips   String? @map("state_fips") @db.Char(2)
+  countyFips  String? @map("county_fips") @db.Char(3)
+  placeFips   String? @map("place_fips") @db.Char(5)
+  zipCode     String? @map("zip_code") @db.Char(5)
+  lat         Decimal? @db.Decimal(9, 6)
+  lng         Decimal? @db.Decimal(9, 6)
+  
+  // Relations
+  metricObs   MetricObs[]
+  snapshots   SnapshotCache[]
+  
+  @@map("geo_area")
+}
+
+model MetricSeries {
+  id          Int     @id @default(autoincrement())
+  code        String  @unique
+  unit        String
+  freq        String
+  source      String
+  
+  // Relations
+  observations MetricObs[]
+  
+  @@map("metric_series")
+}
+
+model MetricObs {
+  seriesId    Int     @map("series_id")
+  geoId       String  @map("geo_id")
+  period      DateTime @db.Date
+  value       Decimal
+  vintage     Int
+  
+  // Relations
+  series      MetricSeries @relation(fields: [seriesId], references: [id])
+  geoArea     GeoArea @relation(fields: [geoId], references: [geoId])
+  
+  @@id([seriesId, geoId, period, vintage])
+  @@map("metric_obs")
+}
+
+model SnapshotCache {
+  geoId               String  @map("geo_id")
+  asof                DateTime @db.Date
+  incomePerCapita     Decimal? @map("income_per_capita")
+  hhIncomeMedian      Decimal? @map("hh_income_median")
+  ageMedian           Decimal? @map("age_median")
+  netMigration1834    Decimal? @map("net_migration_18_34")
+  empGrowth5y         Decimal? @map("emp_growth_5y")
+  topGrowing          Json?   @map("top_growing")
+  topDeclining        Json?   @map("top_declining")
+  proj10              Json?   @map("proj10")
+  
+  // Relations
+  geoArea             GeoArea @relation(fields: [geoId], references: [geoId])
+  
+  @@id([geoId, asof])
+  @@map("snapshot_cache")
+}

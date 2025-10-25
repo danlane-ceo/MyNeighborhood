@@ -1,0 +1,37 @@
+version: '3.8'
+
+services:
+  app:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      - DATABASE_URL=postgresql://postgres:password@postgres:5432/neighborhood_intel
+      - NODE_ENV=development
+    depends_on:
+      - postgres
+    volumes:
+      - .:/app
+      - /app/node_modules
+      - /app/.next
+
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      - POSTGRES_DB=neighborhood_intel
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  adminer:
+    image: adminer:latest
+    ports:
+      - "8080:8080"
+    depends_on:
+      - postgres
+
+volumes:
+  postgres_data:
