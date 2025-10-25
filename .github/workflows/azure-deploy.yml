@@ -5,17 +5,21 @@ on:
     branches: [ main, master ]
   pull_request:
     branches: [ main, master ]
+  workflow_run:
+    workflows: ["Provision Azure Infrastructure and Deploy"]
+    types: [completed]
 
 env:
-  AZURE_CONTAINER_REGISTRY: neighborhoodintelacr.azurecr.io
+  AZURE_CONTAINER_REGISTRY: ${{ secrets.AZURE_CONTAINER_REGISTRY }}
   CONTAINER_NAME: neighborhood-intel
-  RESOURCE_GROUP: rg-neighborhood-intel-prod
+  RESOURCE_GROUP: ${{ secrets.AZURE_RESOURCE_GROUP }}
   CONTAINER_APP_NAME: neighborhood-intel-app
-  CONTAINER_APP_ENVIRONMENT: neighborhood-intel-env
+  CONTAINER_APP_ENVIRONMENT: ${{ secrets.AZURE_CONTAINER_APPS_ENVIRONMENT }}
 
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'push' || github.event_name == 'pull_request' }}
     
     steps:
     - name: Checkout code
@@ -70,3 +74,9 @@ jobs:
           --resource-group $RESOURCE_GROUP \
           --command "npm run db:seed"
       continue-on-error: true
+    
+    - name: Health Check
+      run: |
+        APP_URL="${{ secrets.NEXT_PUBLIC_APP_URL }}"
+        echo "Testing application health at $APP_URL"
+        curl -f "$APP_URL/api/health" || echo "Health check endpoint not available yet"

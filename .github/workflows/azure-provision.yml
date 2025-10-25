@@ -1,0 +1,223 @@
+name: Provision Azure Infrastructure and Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'production'
+        type: choice
+        options:
+        - production
+        - staging
+  push:
+    branches: [ main, master ]
+    paths:
+      - '.github/workflows/azure-provision.yml'
+
+env:
+  AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+  AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+  RESOURCE_GROUP: rg-neighborhood-intel-prod
+  LOCATION: eastus
+  POSTGRES_SERVER: neighborhood-intel-db
+  POSTGRES_DB: neighborhood_intel
+  POSTGRES_USER: postgres
+  POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+  ACR_NAME: neighborhoodintelacr
+  CONTAINER_APP_ENV: neighborhood-intel-env
+  CONTAINER_APP_NAME: neighborhood-intel-app
+  STORAGE_ACCOUNT: neighborhoodintelstorage
+
+jobs:
+  provision-azure-infrastructure:
+    runs-on: ubuntu-latest
+    environment: production
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Azure Login
+      uses: azure/login@v1
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+    
+    - name: Set Azure Subscription
+      run: |
+        az account set --subscription ${{ env.AZURE_SUBSCRIPTION_ID }}
+        az account show
+    
+    - name: Create Resource Group
+      run: |
+        az group create \
+          --name ${{ env.RESOURCE_GROUP }} \
+          --location ${{ env.LOCATION }} \
+          --tags "project=neighborhood-intel" "environment=production"
+    
+    - name: Create PostgreSQL Flexible Server
+      run: |
+        az postgres flexible-server create \
+          --resource-group ${{ env.RESOURCE_GROUP }} \
+          --name ${{ env.POSTGRES_SERVER }} \
+          --location ${{ env.LOCATION }} \
+          --admin-user ${{ env.POSTGRES_USER }} \
+          --admin-password ${{ env.POSTGRES_PASSWORD }} \
+          --sku-name Standard_B1ms \
+          --tier Burstable \
+          --public-access 0.0.0.0 \
+          --storage-size 32 \
+          --version 15 \
+          --yes
+    
+    - name: Create PostgreSQL Database
+      run: |
+        az postgres flexible-server db create \
+          --resource-group ${{ env.RESOURCE_GROUP }} \
+          --server-name ${{ env.POSTGRES_SERVER }} \
+          --database-name ${{ env.POSTGRES_DB }}
+    
+    - name: Configure PostgreSQL Firewall
+      run: |
+        az postgres flexible-server firewall-rule create \
+          --resource-group ${{ env.RESOURCE_GROUP }} \
+          --name ${{ env.POSTGRES_SERVER }} \
+          --rule-name AllowAzureServices \
+          --start-ip-address 0.0.0.0 \
+          --end-ip-address 0.0.0.0
+    
+    - name: Create Azure Container Registry
+      run: |
+        az acr create \
+          --resource-group ${{ env.RESOURCE_GROUP }} \
+          --name ${{ env.ACR_NAME }} \
+          --sku Basic \
+          --admin-enabled true
+    
+    - name: Create Log Analytics Workspace
+      run: |
+        az monitor log-analytics workspace create \
+          --resource-group ${{ env.RESOURCE_GROUP }} \
+          --workspace-name neighborhood-intel-logs \
+          --location ${{ env.LOCATION }}
+    
+    - name: Create Container Apps Environment
+      run: |
+        WORKSPACE_ID=$(az monitor log-analytics workspace show \
+          --resource-group ${{ env.RESOURCE_GROUP }} \
+          --workspace-name neighborhood-intel-logs \
+          --query customerId --output tsv)
+        
+        az containerapp env create \
+          --name ${{ env.CONTAINER_APP_ENV }} \
+          --resource-group ${{ env.RESOURCE_GROUP }} \
+          --location ${{ env.LOCATION }} \
+          --logs-workspace-id $WORKSPACE_ID
+    
+    - name: Create Storage Account
+      run: |
+        az storage account create \
+          --resource-group ${{ env.RESOURCE_GROUP }} \
+          --name ${{ env.STORAGE_ACCOUNT }} \
+          --location ${{ env.LOCATION }} \
+          --sku Standard_LRS \
+          --kind StorageV2
+    
+    - name: Create Storage Container
+      run: |
+        az storage container create \
+          --account-name ${{ env.STORAGE_ACCOUNT }} \
+          --name exports \
+          --public-access blob
+    
+    - name: Get PostgreSQL Connection String
+      id: postgres-connection
+      run: |
+        CONNECTION_STRING="postgresql://${{ env.POSTGRES_USER }}:${{ env.POSTGRES_PASSWORD }}@${{ env.POSTGRES_SERVER }}.postgres.database.azure.com:5432/${{ env.POSTGRES_DB }}?sslmode=require"
+        echo "connection-string=$CONNECTION_STRING" >> $GITHUB_OUTPUT
+    
+    - name: Build and Push Container Image
+      run: |
+        az acr build --registry ${{ env.ACR_NAME }} --image neighborhood-intel:${{ github.sha }} .
+    
+    - name: Create Container App
+      run: |
+        az containerapp create \
+          --name ${{ env.CONTAINER_APP_NAME }} \
+          --resource-group ${{ env.RESOURCE_GROUP }} \
+          --environment ${{ env.CONTAINER_APP_ENV }} \
+          --image ${{ env.ACR_NAME }}.azurecr.io/neighborhood-intel:${{ github.sha }} \
+          --target-port 3000 \
+          --ingress external \
+          --registry-server ${{ env.ACR_NAME }}.azurecr.io \
+          --cpu 0.5 \
+          --memory 1Gi \
+          --min-replicas 1 \
+          --max-replicas 3 \
+          --env-vars \
+            DATABASE_URL="${{ steps.postgres-connection.outputs.connection-string }}" \
+            NODE_ENV="production" \
+            NEXT_PUBLIC_APP_URL="https://${{ env.CONTAINER_APP_NAME }}.azurecontainerapps.io"
+    
+    - name: Run Database Migrations
+      run: |
+        az containerapp exec \
+          --name ${{ env.CONTAINER_APP_NAME }} \
+          --resource-group ${{ env.RESOURCE_GROUP }} \
+          --command "npm run db:push"
+    
+    - name: Seed Initial Data
+      run: |
+        az containerapp exec \
+          --name ${{ env.CONTAINER_APP_NAME }} \
+          --resource-group ${{ env.RESOURCE_GROUP }} \
+          --command "npm run db:seed"
+      continue-on-error: true
+    
+    - name: Get Application URL
+      id: app-url
+      run: |
+        APP_URL=$(az containerapp show \
+          --name ${{ env.CONTAINER_APP_NAME }} \
+          --resource-group ${{ env.RESOURCE_GROUP }} \
+          --query properties.configuration.ingress.fqdn --output tsv)
+        echo "url=https://$APP_URL" >> $GITHUB_OUTPUT
+    
+    - name: Create Application Insights
+      run: |
+        az monitor app-insights component create \
+          --app neighborhood-intel-insights \
+          --location ${{ env.LOCATION }} \
+          --resource-group ${{ env.RESOURCE_GROUP }}
+    
+    - name: Create Budget Alert
+      run: |
+        az consumption budget create \
+          --budget-name neighborhood-intel-budget \
+          --resource-group ${{ env.RESOURCE_GROUP }} \
+          --amount 100 \
+          --time-grain Monthly \
+          --start-date $(date -u +%Y-%m-01T00:00:00Z) \
+          --end-date $(date -u -d "+1 year" +%Y-%m-01T00:00:00Z)
+    
+    - name: Output Deployment Information
+      run: |
+        echo "🚀 Deployment Complete!"
+        echo "Application URL: ${{ steps.app-url.outputs.url }}"
+        echo "Resource Group: ${{ env.RESOURCE_GROUP }}"
+        echo "PostgreSQL Server: ${{ env.POSTGRES_SERVER }}"
+        echo "Container Registry: ${{ env.ACR_NAME }}"
+        echo "Container App: ${{ env.CONTAINER_APP_NAME }}"
+        echo "Storage Account: ${{ env.STORAGE_ACCOUNT }}"
+    
+    - name: Update GitHub Repository Secrets
+      run: |
+        # Update repository secrets with the created resources
+        gh secret set DATABASE_URL --body "${{ steps.postgres-connection.outputs.connection-string }}"
+        gh secret set AZURE_CONTAINER_REGISTRY --body "${{ env.ACR_NAME }}.azurecr.io"
+        gh secret set AZURE_RESOURCE_GROUP --body "${{ env.RESOURCE_GROUP }}"
+        gh secret set AZURE_CONTAINER_APPS_ENVIRONMENT --body "${{ env.CONTAINER_APP_ENV }}"
+        gh secret set NEXT_PUBLIC_APP_URL --body "${{ steps.app-url.outputs.url }}"
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
