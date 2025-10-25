@@ -8,12 +8,14 @@ Neighborhood Intel empowers users to quickly understand community growth, econom
 
 ## ✨ Key Features
 
-- **Income Analysis**: Per-capita and household income trends with 5-year history
-- **Demographics**: Age distribution, migration patterns, and population growth
-- **Industry Trends**: Employment growth by sector with NAICS classification
-- **5-Year History**: Historical trends across all key metrics
-- **10-Year Projections**: Forecasted population, income, and age trends
+- **Income Analysis**: Per-capita and household income trends with 5-year history and projections
+- **Demographics**: Age distribution, migration patterns, and population growth analysis
+- **Industry Trends**: Employment growth by sector with NAICS classification and CAGR analysis
+- **5-Year History**: Historical trends across all key metrics with interactive charts
+- **10-Year Projections**: Forecasted population, income, and age trends with confidence intervals
 - **Comprehensive Data**: Census ACS, BLS, IRS, and BEA data sources
+- **Multi-Area Comparison**: Compare up to 10 geographic areas across any metric
+- **Export & Sharing**: CSV export and shareable URLs for analysis results
 
 ## 🚀 Quick Start
 
@@ -73,6 +75,25 @@ docker-compose exec app npm run db:seed
 - **Backend**: Next.js API Routes + Prisma ORM
 - **Database**: PostgreSQL with Prisma migrations
 - **Analytics**: Custom CAGR, Holt-Winters forecasting, migration signal analysis
+- **Deployment**: Azure Container Apps + Azure Container Registry
+- **CI/CD**: GitHub Actions with automated Azure deployment
+
+### API Endpoints
+
+- `GET /api/geo/search` - Geographic area search with autocomplete
+- `GET /api/geo/[geoId]/snapshot` - Current KPI data for an area
+- `GET /api/geo/[geoId]/timeseries` - Historical data for specific metrics
+- `GET /api/geo/[geoId]/industry` - Industry employment analysis
+- `POST /api/compare` - Multi-area comparison across metrics
+- `GET /api/health` - Application health check
+
+### Page Routes
+
+- `/` - Home page with search functionality
+- `/geo/[geoId]` - Geographic area overview with KPIs
+- `/geo/[geoId]/trends` - 5-year historical trends
+- `/geo/[geoId]/projections` - 10-year forecasts
+- `/compare` - Multi-area comparison tool
 - **Deployment**: Azure Container Apps + Azure Database for PostgreSQL
 
 ### Data Sources

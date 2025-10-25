@@ -5,10 +5,21 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 
+interface HealthStatus {
+  status: string;
+  timestamp: string;
+  version: string;
+  environment: string;
+  uptime: number;
+  memory: NodeJS.MemoryUsage;
+  database?: string;
+  databaseError?: string;
+}
+
 export async function GET(request: NextRequest): Promise<NextResponse> {
   try {
     // Basic health check
-    const healthStatus = {
+    const healthStatus: HealthStatus = {
       status: 'healthy',
       timestamp: new Date().toISOString(),
       version: process.env.npm_package_version || '1.0.0',
